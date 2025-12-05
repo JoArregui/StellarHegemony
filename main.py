@@ -1,114 +1,204 @@
-# main.py
+import os
+import time 
 
 from clases.base import ObjetoEspacial
 from clases.economia import EconomiaFaccion
 # Importar todas las clases necesarias para el mapeo
 from clases.estructuras import EstacionMinera, GeneradorFusionBasico, EstacionComandoOrbital
 from clases.unidades import CazaLigero, CorbetaDefensiva, DroneRecoleccion, Destructor 
-from clases.serializador import guardar_juego, cargar_juego 
-from clases.monitor import MonitorRendimiento 
-from clases.mapeador import MapeadorEspacial 
+from clases.serializador import guardar_juego, cargar_juego
+from clases.monitor_rendimiento import MonitorRendimiento
 
 # =================================================================
-#               FUNCIONES DE COMANDO (G)
+#               FUNCIONES DE INTERFAZ Y COMANDOS
 # =================================================================
 
-def comando_recursos(motor, tiempo_total):
-    """Muestra el estado actual de los recursos."""
-    if not motor.facciones:
-        print("Error: No se ha iniciado ninguna facción.")
-        return
-        
-    faccion = motor.facciones['Terran']
-    print(f"\n[ESTADO T={tiempo_total:.1f}s]")
-    print(f"  Mineral: {faccion.recursos['mineral']:.1f}")
-    print(f"  Energía: {faccion.recursos['energia']:.1f}")
-    print(f"  Materia Rara: {faccion.recursos['materia_rara']:.1f}")
-    print(f"  Población: {faccion.poblacion_actual}/{faccion.poblacion_maxima}")
+def limpiar_pantalla():
+    """Borra la pantalla de la consola según el sistema operativo."""
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-def comando_mapa(motor, tiempo_total):
-    """Muestra la posición de todos los objetos activos."""
-    print(f"\n[MAPA T={tiempo_total:.1f}s]")
-    objetos_activos = motor.mapeador.listar_objetos_activos()
-    
-    if not objetos_activos:
-        print("  No hay objetos activos.")
-        return
-        
-    for obj in objetos_activos:
-        # Redondear las posiciones para una salida más limpia
-        posicion_redondeada = tuple(map(lambda x: round(x, 2), obj['posicion']))
-        print(f"  ID {obj['id']}: {obj['clase']} ({obj['faccion']}) | Posición: {posicion_redondeada} | Vida: {obj['vida']}")
-        
-# =================================================================
-#               BUCLE PRINCIPAL DE LA CLI (G)
-# =================================================================
+def mostrar_ayuda():
+    """Muestra la lista de comandos disponibles."""
+    print("\n--- Comandos Disponibles ---")
+    print("recursos                   -> Muestra el estado actual de los recursos.")
+    print("producir <Unidad>          -> Añade una unidad a la cola de producción (Ej: producir DroneRecoleccion).")
+    print("ordenar <ID> <accion>      -> Asigna una nueva orden a una unidad (Ej: ordenar 3 recolectar).")
+    print("salir                      -> Termina la simulación.")
+    print("ayuda                      -> Muestra esta lista.")
+    print("----------------------------")
 
-def jugar_cli(motor):
+def procesar_comando(motor_juego, comando):
+    """Procesa un comando de texto introducido por el usuario."""
+    comando = comando.strip().lower()
+    partes = comando.split()
+    accion = partes[0] if partes else ""
     
-    delta_tiempo = 0.5 # Avance de tiempo por tick de simulación
+    faccion_terran = motor_juego.facciones.get('Terran')
     
-    # Inicia o Carga el juego
-    motor.iniciar_juego(cargar=True)
+    if accion == 'ayuda':
+        mostrar_ayuda()
+        return True
     
-    # Determinar el tiempo inicial (para la partida cargada)
-    tiempo_total = 0.0
-    if motor.facciones and motor.monitor.historial_ticks:
-        # Si se cargó, reanudamos el tiempo desde el último registro
-        tiempo_total = motor.monitor.historial_ticks[-1]['tiempo']
+    if accion == 'recursos':
+        if faccion_terran:
+            print("\n--- Recursos Terran ---")
+            for r, c in faccion_terran.recursos.items():
+                print(f"  {r.capitalize()}: {c:.1f}")
+            print(f"  Población: {faccion_terran.poblacion_actual}/{faccion_terran.poblacion_maxima}")
+            print("-------------------------")
+        return True
         
-    print("\n--- INTERFAZ DE COMANDOS (CLI) INICIADA ---")
-    print("Comandos: 'tick', 'mapa', 'recursos', 'guardar', 'salir'")
-    print(f"  Misión: Recolectar {motor.objetivo_mision['cantidad_requerida']} de {motor.objetivo_mision['recurso'].upper()}.")
-    
-    while not motor.mision_completada:
+    if accion == 'producir':
+        # --- Lógica de PRODUCIR (EXISTENTE) ---
+        if len(partes) < 2:
+            print("[ERROR] Uso: producir <Unidad>")
+            return True
+            
+        nombre_unidad = partes[1]
+        clase_unidad = motor_juego.UNIDAD_CLASES.get(nombre_unidad)
         
+        if not clase_unidad:
+            print(f"[ERROR] Unidad '{nombre_unidad}' desconocida. Pruebe 'DroneRecoleccion'.")
+            return True
+        
+        comando_orbital = motor_juego.objetos.get(1)
+        if not comando_orbital or not isinstance(comando_orbital, EstacionComandoOrbital):
+            print("[ERROR] No se encuentra la Estación de Comando Orbital (ID 1) para producir unidades.")
+            return True
+            
         try:
-            comando = input(f"\nStellarHegemony (T={tiempo_total:.1f}s) > ").strip().lower()
-        except EOFError:
-            print("\nSaliendo de la simulación. ¡Adiós!")
-            break
+            tiempo_produccion = clase_unidad.tiempo_produccion
+            if not hasattr(comando_orbital, 'cola_produccion'):
+                comando_orbital.cola_produccion = []
+            
+            comando_orbital.cola_produccion.append((nombre_unidad, tiempo_produccion))
+            
+            print(f"[COMANDO EXITOSO] '{nombre_unidad}' añadido a la cola de producción. Tiempo: {tiempo_produccion:.1f}s")
+            
+        except AttributeError:
+            print(f"[ERROR] No se pudo obtener la información de tiempo de producción para {nombre_unidad}.")
+            return True
 
-        if comando == 'salir':
-            print("Saliendo de la simulación. ¡Adiós!")
-            break
+        return True
+    
+    # --- NUEVO: ORDENAR UNIDADES ---
+    if accion == 'ordenar':
+        if len(partes) < 3:
+            print("[ERROR] Uso: ordenar <ID> <accion> (Ej: ordenar 3 recolectar)")
+            return True
             
-        elif comando == 'guardar':
-            guardar_juego(motor)
+        try:
+            id_unidad = int(partes[1])
+            accion_orden = partes[2]
+        except ValueError:
+            print("[ERROR] El ID de la unidad debe ser un número entero.")
+            return True
             
-        elif comando == 'recursos':
-            comando_recursos(motor, tiempo_total)
+        unidad = motor_juego.objetos.get(id_unidad)
+        
+        if not unidad or unidad.faccion != 'Terran':
+            print(f"[ERROR] Unidad con ID {id_unidad} no encontrada o no pertenece a Terran.")
+            return True
+
+        if accion_orden == 'recolectar' and isinstance(unidad, DroneRecoleccion):
             
-        elif comando == 'mapa':
-            comando_mapa(motor, tiempo_total)
+            # Buscamos la Estación Minera (ID 2) y el Comando (ID 1)
+            minera = motor_juego.objetos.get(2)
+            comando = motor_juego.objetos.get(1)
             
-        elif comando == 'tick':
-            # Ejecutar varios ticks para simular un paso de tiempo notable
-            ticks_por_comando = 10 # Simular 10 ticks = 5.0 segundos
-            
-            print(f"Simulando {ticks_por_comando} ticks ({ticks_por_comando * delta_tiempo:.1f}s)...")
-            
-            for _ in range(ticks_por_comando):
-                motor.tick_simulacion(delta_tiempo, tiempo_total)
-                tiempo_total += delta_tiempo
+            if minera and comando:
+                unidad.orden_recolectar(minera, comando)
+                print(f"[COMANDO EXITOSO] Drone [{id_unidad}] reasignado: Recolectar (Minera 2 -> Comando 1).")
+                return True
+            else:
+                print("[ERROR] No se encontraron la Estación Minera (ID 2) o Comando (ID 1) para la orden.")
+                return True
                 
-                if motor.mision_completada:
-                    break
-                    
-            if not motor.mision_completada:
-                comando_recursos(motor, tiempo_total)
-            
         else:
-            print(f"Comando desconocido: '{comando}'.")
+            print(f"[ERROR] Acción '{accion_orden}' o tipo de unidad no soportados para el ID {id_unidad}.")
+            return True
 
-    if motor.mision_completada:
-        print(f"\n\n¡MISIÓN CUMPLIDA! El juego terminó en T={tiempo_total:.2f}s.")
-        print(motor.monitor.generar_informe_final())
+    if accion == 'salir':
+        print("[COMANDO] Terminando simulación...")
+        return 'salir'
+
+    print(f"[ERROR] Comando desconocido: '{comando}'. Escriba 'ayuda' para ver los comandos.")
+    return True
 
 
-# =================================================================
-#               CLASE MOTORJUEGO (NO MODIFICADA, SOLO AÑADIDA)
-# =================================================================
+def imprimir_estado_juego(motor_juego):
+    """Muestra el estado actual del juego de forma limpia en la consola."""
+    limpiar_pantalla()
+    
+    # Solo mostramos información para la facción 'Terran'
+    faccion = motor_juego.facciones.get('Terran')
+    if not faccion:
+        print("Error: Faccion 'Terran' no encontrada.")
+        return
+
+    # --- 1. Encabezado y Misión ---
+    print("=======================================")
+    print("🚀 STELLAR HEGEMONY | SIMULACIÓN 🚀")
+    print(f"Tiempo total: {motor_juego.tiempo_total_simulacion:.1f}s")
+    print("=======================================")
+    
+    recurso_mision = motor_juego.objetivo_mision['recurso'].upper()
+    cantidad_r = motor_juego.objetivo_mision['cantidad_requerida']
+    progreso = faccion.recursos[motor_juego.objetivo_mision['recurso']]
+    
+    estado_mision = "COMPLETADA" if motor_juego.mision_completada else f"{progreso:.1f}/{cantidad_r}"
+    
+    print(f"🎯 Misión: Recolectar {cantidad_r} de {recurso_mision} ({estado_mision})")
+    print("---------------------------------------")
+
+    # --- 2. Recursos y Población ---
+    print("💰 Economía:")
+    print(f"  Mineral: {faccion.recursos['mineral']:.1f} | Energía: {faccion.recursos['energia']:.1f} | Materia Rara: {faccion.recursos['materia_rara']:.1f}")
+    print(f"  Población: {faccion.poblacion_actual}/{faccion.poblacion_maxima}")
+    print("---------------------------------------")
+
+    # --- 3. Unidades y Estructuras Activas ---
+    print("🏭 Objetos y Estados:")
+    
+    # Agrupamos objetos por tipo y estado
+    objetos_por_tipo = {}
+    
+    for obj_id, obj in motor_juego.objetos.items():
+        nombre = obj.__class__.__name__
+        estado = ""
+        
+        if hasattr(obj, 'cola_produccion') and obj.cola_produccion:
+            item_prod = obj.cola_produccion[0]
+            estado = f"-> Produciendo {item_prod[0]} ({item_prod[1]:.1f}s)"
+        elif nombre == 'DroneRecoleccion':
+            
+            # --- CORRECCIÓN DE ATRIBUTO ---
+            estado_drone = getattr(obj, '_estado_movimiento', 'INACTIVO') # Usamos el atributo real
+            
+            if estado_drone == 'MOVIENDO':
+                if obj.destino_actual:
+                    estado = f"-> {estado_drone} a {obj.destino_actual.nombre} ({obj.recurso_cargado} {obj.capacidad_cargada:.1f})"
+                else:
+                    estado = f"-> {estado_drone} (Sin destino)"
+            elif estado_drone == 'RECOLECTANDO':
+                if obj.destino_actual:
+                    estado = f"-> {estado_drone} en {obj.destino_actual.nombre} ({obj.recurso_cargado} {obj.capacidad_cargada:.1f})"
+                else:
+                    estado = f"-> {estado_drone} (Sin recurso)"
+            elif estado_drone == 'ENTREGANDO':
+                if obj.destino_actual:
+                    estado = f"-> {estado_drone} en {obj.destino_actual.nombre} ({obj.recurso_cargado} {obj.capacidad_cargada:.1f})"
+                else:
+                    estado = f"-> {estado_drone} (Sin base)"
+            
+        objetos_por_tipo.setdefault(nombre, []).append(f"  [{obj_id}] {nombre} (Vida: {obj.vida_actual:.0f}) {estado}")
+
+    for nombre, lista in objetos_por_tipo.items():
+        print(f"  > {nombre} ({len(lista)}):")
+        for item in lista:
+            print(item)
+    print("=======================================")
+
 
 class MotorJuego:
     def __init__(self):
@@ -116,15 +206,18 @@ class MotorJuego:
         self.facciones = {}
         self.contador_id = 0
         
+        # --- Atributos de Simulación ---
+        self.tiempo_total_simulacion = 0.0
         self.monitor = MonitorRendimiento() 
-        self.mapeador = MapeadorEspacial()
-
+        
+        # --- Configuración de la Misión ---
         self.objetivo_mision = {
             'recurso': 'mineral', 
             'cantidad_requerida': 120 
         }
         self.mision_completada = False
 
+        # --- Mapeo de Clases para la Cola de Producción (USADO POR ESTRUCTURAS) ---
         self.UNIDAD_CLASES = {
             'DroneRecoleccion': DroneRecoleccion,
             'CazaLigero': CazaLigero,
@@ -135,29 +228,40 @@ class MotorJuego:
         }
 
     def crear_objeto(self, clase_objeto, faccion_nombre, posicion):
+        """Crea una instancia de un ObjetoEspacial y lo añade al juego."""
         self.contador_id += 1
         nuevo_objeto = clase_objeto(self.contador_id, faccion_nombre, posicion)
         self.objetos[self.contador_id] = nuevo_objeto
         
         if isinstance(nuevo_objeto, EstacionComandoOrbital):
             if faccion_nombre in self.facciones:
+                # El comando aumenta el límite de población al ser creado.
                 self.facciones[faccion_nombre].poblacion_maxima += nuevo_objeto.poblacion_maxima_incremento 
 
         return nuevo_objeto
 
-    def tick_simulacion(self, delta_tiempo, tiempo_total_acumulado):
+    def tick_simulacion(self, delta_tiempo):
         
+        # --- 0. INICIAR MONITOR ---
+        self.monitor.iniciar_tick() 
+
+        produccion_total_estructuras = {} 
         recursos_entregados_drones = {}
 
-        # 1. Proceso de Estructuras (Producción y Entrenamiento)
+        # --- 1. Proceso de Estructuras (Producción y Entrenamiento) ---
         for id_objeto, objeto in list(self.objetos.items()):
+            
             if isinstance(objeto, EstacionMinera) or isinstance(objeto, GeneradorFusionBasico):
+                # A. Producción de recursos (Minera/Generador) - Solo llenan el almacén
                 objeto.tick_simulacion_produccion() 
+
             if isinstance(objeto, EstacionComandoOrbital):
+                 # B. Entrenamiento de unidades (Centro de Comando)
                  objeto.tick_simulacion_produccion(self, delta_tiempo) 
         
-        # 2. Actualización de Unidades (Movimiento, Combate, Recolección)
+        # --- 2. Actualización de Unidades (Movimiento, Combate, Recolección) ---
         for id_objeto, objeto in list(self.objetos.items()):
+            
             if hasattr(objeto, 'tick_simulacion') and objeto.vida_actual > 0:
                 recursos_devueltos = objeto.tick_simulacion(self, delta_tiempo) 
                 
@@ -173,19 +277,19 @@ class MotorJuego:
                     self.facciones[objeto.faccion].poblacion_actual -= getattr(objeto, 'poblacion_coste', 0)
                 del self.objetos[id_objeto]
 
-        # 3. Aplicación de Recursos Entregados por Drones (Puntuales)
+        # --- 3. Aplicación de Recursos Entregados por Drones (Puntuales) ---
         for faccion_nombre, recursos in recursos_entregados_drones.items():
             if faccion_nombre in self.facciones:
                 economia = self.facciones[faccion_nombre]
                 for recurso, cantidad in recursos.items():
                     economia.recursos[recurso] += cantidad
         
-        # 4. Aplicación del Costo de Mantenimiento
+        # --- 4. Aplicación del Costo de Mantenimiento ---
         for faccion_nombre, faccion in self.facciones.items():
             objetos_faccion = [obj for obj in self.objetos.values() if obj.faccion == faccion_nombre]
             faccion.aplicar_mantenimiento(objetos_faccion, delta_tiempo)
             
-        # 5. Chequeo de Misión
+        # --- 5. Chequeo de Misión ---
         if not self.mision_completada:
             for faccion_nombre, faccion in self.facciones.items():
                 recurso_mision = self.objetivo_mision['recurso']
@@ -196,25 +300,27 @@ class MotorJuego:
                     print(f"\n[CONDICIÓN DE VICTORIA] ¡Misión completada por {faccion_nombre}!")
                     print(f"Objetivo: Alcanzar {cantidad_requerida} de {recurso_mision.upper()}.")
                     
-        # 6. Penalización por Déficit de Recursos
+        # --- 6. Penalización por Déficit de Recursos ---
         DANO_DEFICIT_ENERGIA = 2.0 
 
         for faccion_nombre, faccion in self.facciones.items():
+            
             if faccion.recursos['energia'] < 0:
+                
                 dano_aplicar = DANO_DEFICIT_ENERGIA * delta_tiempo
+                
                 for id_objeto in list(self.objetos.keys()): 
                     objeto = self.objetos.get(id_objeto)
+                    
                     if objeto and objeto.faccion == faccion_nombre and objeto.vida_actual > 0:
+                        
                         if hasattr(objeto, 'mantenimiento_coste') and objeto.mantenimiento_coste.get('energia', 0) > 0:
                             objeto.recibir_danio(dano_aplicar)
-                            
-        # 7. Trazado de Rendimiento
-        for faccion in self.facciones.values():
-            self.monitor.registrar_estado_faccion(faccion, tiempo_total_acumulado)
-            
-        # 8. Actualización del Mapeador
-        self.mapeador.actualizar_mapa(self.objetos)
-
+        
+        # --- 7. FINALIZAR MONITOR ---
+        self.tiempo_total_simulacion += delta_tiempo
+        self.monitor.finalizar_tick(self, delta_tiempo)
+        
         return 
 
 
@@ -223,18 +329,20 @@ class MotorJuego:
         if cargar:
             juego_cargado = cargar_juego()
             if juego_cargado:
+                # Si se carga, reemplazamos el 'self' actual con el estado cargado
                 self.__dict__.update(juego_cargado.__dict__)
                 print(f"[REANUDANDO] Mineral actual: {self.facciones['Terran'].recursos['mineral']:.1f}")
                 return
 
         # --- LÓGICA DE INICIO DE JUEGO NUEVO ---
-        print("--- Iniciando Stellar Hegemony: Juego Nuevo ---")
+        print("--- Iniciando Stellar Hegemony: TEST DE CARGADO Y GUARDADO ---")
         
         # --- FACCIÓN TERRAN ---
         terrana_nombre = 'Terran'
         self.facciones[terrana_nombre] = EconomiaFaccion(terrana_nombre)
         terrana = self.facciones[terrana_nombre]
         
+        # Recursos iniciales para el test
         terrana.recursos = {'mineral': 100, 'energia': 500, 'materia_rara': 500} 
         
         # 1. Comando (ID 1)
@@ -247,39 +355,107 @@ class MotorJuego:
         drone_t = self.crear_objeto(DroneRecoleccion, terrana_nombre, (10, 10, 10))
         terrana.poblacion_actual += drone_t.poblacion_coste
         
+        # El Drone comienza a trabajar inmediatamente: Minera -> Comando
         drone_t.orden_recolectar(minera_t, comando_t)
         
         print(f"\n[MISIÓN] Recolectar {self.objetivo_mision['cantidad_requerida']} de {self.objetivo_mision['recurso'].upper()}.")
         print(f"[ECONOMÍA INICIAL] Mineral: {terrana.recursos['mineral']:.1f}")
-        
 
-
-# =================================================================
-#               EJECUCIÓN PRINCIPAL
-# =================================================================
 
 if __name__ == "__main__":
     
-    # --- FASE 1: Asegurar un archivo de guardado inicial ---
-    # Esto garantiza que el juego tenga un archivo para cargar/continuar.
-    print("\n\n=============== FASE 1: CREANDO ARCHIVO DE GUARDADO INICIAL ===============")
+    # --- Ejecutar Prueba 1: GUARDADO INICIAL ---
+    print("\n\n=============== PRUEBA 1: GUARDADO INICIAL (Modo Consola) ===============")
     juego_guardado = MotorJuego()
     
-    tiempo_simular_guardado = 5.0 # Guardar a los 5.0s de simulación
+    tiempo_simular_guardado = 5.0
     
     juego_guardado.iniciar_juego(cargar=False) 
     
+    # Ejecutar simulación a medio camino
     tiempo_total = 0.0
     delta_tiempo = 0.1
-    print("\n--- Simulación a medio camino ---")
+    
+    print("\n--- Simulación a medio camino (Ver la Consola) ---")
     while tiempo_total < tiempo_simular_guardado:
-        juego_guardado.tick_simulacion(delta_tiempo, tiempo_total) 
+        juego_guardado.tick_simulacion(delta_tiempo)
         tiempo_total += delta_tiempo
         
-    print(f"T: {tiempo_total:.1f}s | Mineral al guardar: {juego_guardado.facciones['Terran'].recursos['mineral']:.1f}")
+        # DIBUJAR ESTADO EN CONSOLA
+        imprimir_estado_juego(juego_guardado)
+        time.sleep(0.05) # Pausa mínima para que sea legible
+
+    print(f"\nT: {tiempo_total:.1f}s | Mineral al guardar: {juego_guardado.facciones['Terran'].recursos['mineral']:.1f}")
     guardar_juego(juego_guardado)
     
-    # --- FASE 2: INICIO DE LA CLI INTERACTIVA ---
-    print("\n\n=============== FASE 2: INICIO DE JUEGO INTERACTIVO ===============")
-    juego_interactivo = MotorJuego()
-    jugar_cli(juego_interactivo)
+    # Añadimos una pausa al final del Guardado para ver el output de la consola
+    time.sleep(1.0) 
+    
+
+    # --- Ejecutar Prueba 2: CARGADO Y VICTORIA (INTERACTIVA) ---
+    print("\n\n=============== PRUEBA 2: CARGADO Y VICTORIA (Modo Interactivo) ===============")
+    juego_cargado = MotorJuego()
+    juego_cargado.iniciar_juego(cargar=True) 
+
+    if not juego_cargado.mision_completada:
+        
+        terrana = juego_cargado.facciones['Terran']
+        print(f"\n[VERIFICACIÓN] Mineral: {terrana.recursos['mineral']:.1f} (Debe ser 100.0)")
+
+        # Bucle de Simulación para completar la misión
+        tiempo_total = 5.0 
+        delta_tiempo = 0.1 
+        num_ticks = 0
+        max_duracion = 100.0 
+        
+        # --- VARIABLES DE CONTROL DE BUCLE INTERACTIVO ---
+        ticks_por_comando = 10 # Pausa para comando cada 10 ticks (1.0s de simulación)
+        simulacion_activa = True
+        
+        print("\n--- Continuación de la Simulación (Modo Interactivo) ---")
+        
+        while tiempo_total < max_duracion and not juego_cargado.mision_completada and simulacion_activa:
+            
+            juego_cargado.tick_simulacion(delta_tiempo)
+            tiempo_total += delta_tiempo
+            num_ticks += 1
+            
+            # DIBUJAR ESTADO EN CONSOLA
+            imprimir_estado_juego(juego_cargado)
+            
+            # --- INTERACCIÓN CON EL JUGADOR ---
+            if num_ticks % ticks_por_comando == 0:
+                
+                # Pausa controlada para entrada de comando
+                print("\n[COMANDO] Escriba un comando ('ayuda' para lista, ENTER para continuar): ")
+                try:
+                    comando_usuario = input(">>> ") 
+                    
+                    if comando_usuario.strip():
+                        resultado = procesar_comando(juego_cargado, comando_usuario)
+                        if resultado == 'salir':
+                            simulacion_activa = False
+                            break
+                        # Pausa adicional para leer el resultado del comando
+                        time.sleep(2.0) 
+                        
+                except EOFError:
+                    # Permite al usuario continuar si presiona Ctrl+D
+                    pass 
+                except KeyboardInterrupt:
+                    # Permite al usuario salir con Ctrl+C
+                    simulacion_activa = False
+                    break
+            
+            # Retraso visual mínimo para que la simulación no parpadee demasiado rápido
+            time.sleep(0.05) 
+        
+        print(f"\n--- Resultado Final (Cargado) ---")
+        print(f"Tiempo simulado total: {tiempo_total:.2f} segundos.")
+        print(f"Misión completada: {'Sí' if juego_cargado.mision_completada else 'No'}")
+        
+        if juego_cargado.mision_completada:
+            print(f"Mineral final: {terrana.recursos['mineral']:.1f}")
+            
+    # El resumen de rendimiento debe imprimirse después de que la simulación termine
+    juego_cargado.monitor.imprimir_resumen()
